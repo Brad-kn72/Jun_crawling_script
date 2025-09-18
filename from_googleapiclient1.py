@@ -28,7 +28,9 @@ STATE_PATH = "search_state.json"  # 키워드별 페이지 진행 상태 저장
 ORDER = "viewCount"            # "date" 가능
 RETRY_MAX = 5                   # 재시도 횟수
 RETRY_BACKOFF = 1.6             # 지수 백오프 계수
-PAGE_LIMIT = 5                  # 키워드별 검색 페이지 제한(호출량 절감)
+PAGE_LIMIT = 10                  # 키워드별 검색 페이지 제한(호출량 절감)
+PAGE_EXPAND_STEP = 5            # 신규 항목 없을 때 추가 탐색 페이지 수
+PAGE_EXPAND_MAX = 10            # 최대 확장 횟수(무한 루프 방지)
 CALL_DELAY = 0.2                # 연속 호출 간 지연(초)
 
 # YouTube API 쿼터 사용 계획(대략치). 환경변수로 조정 가능
@@ -63,7 +65,10 @@ def yt_call(fn, **kwargs):
             return fn(**kwargs).execute()
         except HttpError as e:
             code = getattr(e.resp, "status", None)
-            if code in (403, 429, 500, 503):
+            if code == 403:
+                log(f"[ERROR] API 403 응답 감지 → 즉시 종료")
+                sys.exit(1)
+            if code in (429, 500, 503):
                 log(f"[WARN] API 오류(code={code}) 재시도 {attempt}/{RETRY_MAX} 후 {delay:.1f}s 대기")
                 time.sleep(delay); delay *= RETRY_BACKOFF
                 continue
@@ -199,14 +204,18 @@ def save_state(state, path=STATE_PATH):
         json.dump(state, f, ensure_ascii=False, indent=2)
     os.replace(tmp_path, path)
 
-def collect_titles():
+def collect_titles(page_limit=None, allow_expand=True, expand_attempts=0):
     youtube = build_client()
     now = datetime.datetime.now(datetime.UTC)
     published_after = (now - datetime.timedelta(days=30*MONTHS)).isoformat().replace("+00:00", "Z")
     pool = []
     budget = QUOTA_BUDGET
     state = load_state()
-    log(f"[INFO] 시작 budget={budget}, safety={QUOTA_SAFETY}")
+    page_limit_value = page_limit or PAGE_LIMIT
+    log(f"[INFO] 시작 budget={budget}, safety={QUOTA_SAFETY}, page_limit={page_limit_value}")
+
+    quota_hit_global = False
+    quota_error_detected = False
 
     for idx, kw in enumerate(TARGET_KEYWORDS, 1):
         log(f"[{idx}/{len(TARGET_KEYWORDS)}] 검색 키워드: {kw}")
@@ -222,15 +231,17 @@ def collect_titles():
         if keyword_budget_total <= skip_cost:
             log(f"[INFO] {kw}는 예산 부족으로 대기 (현재 예산 {keyword_budget_total}, skip 비용 {skip_cost})")
             state[kw] = {"page_cursor": skip_pages}
+            quota_hit_global = True
             continue
         if PER_PAGE_COST > 0:
             page_budget_pages = (keyword_budget_total - skip_cost) // PER_PAGE_COST
         else:
-            page_budget_pages = PAGE_LIMIT
-        page_limit_for_run = min(PAGE_LIMIT, page_budget_pages)
+            page_budget_pages = page_limit_value
+        page_limit_for_run = min(page_limit_value, page_budget_pages)
         if page_limit_for_run <= 0:
             log(f"[INFO] {kw} 새 페이지 처리 예산 부족 -> 다음 키워드로 이동")
             state[kw] = {"page_cursor": skip_pages}
+            quota_hit_global = True
             continue
         log(f"[INFO] {kw} 키워드 예산 {keyword_budget_total}유닛, 이번 실행 최대 {page_limit_for_run}페이지 처리")
 
@@ -246,11 +257,13 @@ def collect_titles():
                 log(f"[INFO] {kw} 잔여 예산 부족으로 중단 (남은 예산 {kw_budget_left})")
                 state[kw] = {"page_cursor": kw_cursor}
                 state_updated = True
+                quota_hit_global = True
                 break
             # 예산 점검: search 호출 전 여유 확인
             if budget < (COST_SEARCH + QUOTA_SAFETY):
                 log(f"[INFO] budget 부족으로 search 중단 (remain={budget})")
                 quota_hit = True
+                quota_hit_global = True
                 break
             # search.list 호출: 쿼터/레이트 제한 시 부분 결과 저장 후 중단
             try:
@@ -260,6 +273,8 @@ def collect_titles():
                 if code in (403, 429):
                     log(f"[WARN] search 제한(code={code}). 현재까지 수집 {len(pool)}개, 키워드 루프 중단")
                     quota_hit = True
+                    quota_hit_global = True
+                    quota_error_detected = True
                     break
                 raise
             budget -= COST_SEARCH
@@ -287,6 +302,7 @@ def collect_titles():
                 log(f"[INFO] {kw} 잔여 예산으로 상세 정보 조회 불가 (남은 예산 {kw_budget_left})")
                 state[kw] = {"page_cursor": kw_cursor}
                 state_updated = True
+                quota_hit_global = True
                 break
 
             time.sleep(CALL_DELAY)
@@ -295,6 +311,7 @@ def collect_titles():
                 if budget < (COST_VIDEOS + QUOTA_SAFETY):
                     log(f"[INFO] budget 부족으로 videos 중단 (remain={budget})")
                     quota_hit = True
+                    quota_hit_global = True
                     break
                 v = fetch_video_details(youtube, video_ids)
             except HttpError as e:
@@ -302,6 +319,8 @@ def collect_titles():
                 if code in (403, 429):
                     log(f"[WARN] videos 제한(code={code}). 현재까지 수집 {len(pool)}개, 키워드 루프 중단")
                     quota_hit = True
+                    quota_hit_global = True
+                    quota_error_detected = True
                     break
                 raise
             budget -= COST_VIDEOS
@@ -312,6 +331,7 @@ def collect_titles():
                 log(f"[INFO] {kw} 잔여 예산으로 channel 조회 불가 (남은 예산 {kw_budget_left})")
                 state[kw] = {"page_cursor": kw_cursor}
                 state_updated = True
+                quota_hit_global = True
                 break
             time.sleep(CALL_DELAY)
             try:
@@ -319,6 +339,7 @@ def collect_titles():
                 if budget < (COST_CHANNELS + QUOTA_SAFETY):
                     log(f"[INFO] budget 부족으로 channels 중단 (remain={budget})")
                     quota_hit = True
+                    quota_hit_global = True
                     break
                 ch_map = fetch_channel_subs(youtube, channel_ids)
             except HttpError as e:
@@ -326,6 +347,8 @@ def collect_titles():
                 if code in (403, 429):
                     log(f"[WARN] channels 제한(code={code}). 현재까지 수집 {len(pool)}개, 키워드 루프 중단")
                     quota_hit = True
+                    quota_hit_global = True
+                    quota_error_detected = True
                     break
                 raise
             budget -= COST_CHANNELS
@@ -433,6 +456,14 @@ def collect_titles():
         log(f"[DONE] Appended {added} (dup={dup}) to {OUTPUT_PATH}. prev={prev}, pool={len(pool)}, new_file={dated_path}")
     else:
         log(f"[DONE] 신규 항목 없음 (dup={dup}). prev={prev}, pool={len(pool)}")
+
+    if allow_expand and added == 0 and not quota_error_detected and not quota_hit_global:
+        if expand_attempts >= PAGE_EXPAND_MAX:
+            log(f"[INFO] 신규 항목 없고 확장 한도({PAGE_EXPAND_MAX}) 도달 → 추가 확장 중단")
+        else:
+            next_limit = page_limit_value + PAGE_EXPAND_STEP
+            log(f"[INFO] 신규 항목 없음 → page_limit {page_limit_value} → {next_limit} 재시도 (attempt {expand_attempts + 1}/{PAGE_EXPAND_MAX})")
+            collect_titles(page_limit=next_limit, allow_expand=True, expand_attempts=expand_attempts + 1)
 
 if __name__ == "__main__":
     try:
