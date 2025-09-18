@@ -1,7 +1,7 @@
 {
-  "python.defaultInterpreterPath": "/Users/qa/Downloads/준크롤링/.venv/bin/python",
+  "python.defaultInterpreterPath": "/Users/qa/Documents/GitHub/Jun_crawling_script/.venv/bin/python",
   "code-runner.executorMap": {
-    "python": "/Users/qa/Downloads/준크롤링/.venv/bin/python -u"
+    "python": "/Users/qa/Documents/GitHub/Jun_crawling_script/.venv/bin/python -u"
   },
   "code-runner.runInTerminal": false
 }
