@@ -1,0 +1,183 @@
+name: Daily Smart Titles Report
+
+on:
+  schedule:
+    # 매일 09:00 KST (UTC 00:00)
+    - cron: '0 15 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect_and_email:
+    name: Collect Titles & Send Email
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📦 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📚 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-api-python-client
+
+      - name: 🏃 Run collector script
+        id: run_script
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python from_googleapiclient1.py | tee run.log
+
+      - name: 🧮 Summarize results
+        id: summarize
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p mail
+          touch run.log
+          cp run.log mail/run.log
+
+          master_file="smart_titles_top.txt"
+          master_count=0
+          if [ -f "$master_file" ]; then
+            master_count=$(grep -cve '^[[:space:]]*$' "$master_file" || true)
+          fi
+
+          new_file=$(grep -oE 'new_file=[^ ]+' run.log | tail -n1 | cut -d= -f2 || true)
+          has_new=false
+          new_count=0
+          if [ -n "$new_file" ] && [ -f "$new_file" ]; then
+            has_new=true
+            new_count=$(grep -cve '^[[:space:]]*$' "$new_file" || true)
+          else
+            new_file=""
+          fi
+
+          attachments_file="mail/attachments.list"
+          : > "$attachments_file"
+          if [ "$has_new" = "true" ]; then
+            echo "$new_file" >> "$attachments_file"
+          fi
+          if [ -f "$master_file" ]; then
+            echo "$master_file" >> "$attachments_file"
+          fi
+          echo "mail/run.log" >> "$attachments_file"
+
+          {
+            echo "run_status=${{ steps.run_script.outcome }}"
+            echo "has_new=$has_new"
+            echo "new_file=$new_file"
+            echo "new_count=$new_count"
+            echo "master_file=$master_file"
+            echo "master_count=$master_count"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "attachments<<EOF"
+            cat "$attachments_file"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 🧾 Build email body
+        id: email_body
+        if: always()
+        shell: bash
+        env:
+          RUN_STATUS: ${{ steps.summarize.outputs.run_status }}
+          HAS_NEW: ${{ steps.summarize.outputs.has_new }}
+          NEW_FILE: ${{ steps.summarize.outputs.new_file }}
+          NEW_COUNT: ${{ steps.summarize.outputs.new_count }}
+          MASTER_COUNT: ${{ steps.summarize.outputs.master_count }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p mail
+
+          status_badge="⚠️ 실행 상태 미확인"
+          if [ "$RUN_STATUS" = "success" ]; then
+            status_badge="✅ 실행 성공"
+          elif [ "$RUN_STATUS" = "failure" ]; then
+            status_badge="❌ 실행 실패"
+          fi
+
+          if [ "$HAS_NEW" = "true" ]; then
+            headline="🎉 신규 타이틀 ${NEW_COUNT}건 발견"
+            new_file_text="$NEW_FILE"
+          else
+            headline="ℹ️ 신규 타이틀 없음"
+            new_file_text="없음"
+          fi
+
+          cat > mail/body.html <<HTML
+          <h2>Smart Titles 일간 리포트</h2>
+          <p>${status_badge}</p>
+          <p>${headline}</p>
+          <ul>
+            <li>마스터 파일 누적: ${MASTER_COUNT}건</li>
+            <li>신규 파일: ${new_file_text}</li>
+          </ul>
+          <p><a href="${RUN_URL}">GitHub Actions 실행 상세 보기</a></p>
+          <p>첨부된 로그와 데이터 파일을 참고하세요.</p>
+          HTML
+
+          {
+            echo "html<<EOF"
+            cat mail/body.html
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: ✅ Validate SMTP secrets
+        id: check_secrets
+        if: always()
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: |
+          set -e
+          missing=()
+          for v in SMTP_HOST SMTP_PORT SMTP_USERNAME SMTP_PASSWORD; do
+            if [ -z "${!v}" ]; then
+              echo "⚠️ Missing secret: $v"
+              missing+=("$v")
+            fi
+          done
+          if [ ${#missing[@]} -eq 0 ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SMTP secrets not complete. Email step will be skipped. Missing: ${missing[*]}"
+          fi
+
+      - name: 📧 Send email
+        if: always() && steps.check_secrets.outputs.ready == 'true'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          secure: ${{ secrets.SMTP_PORT == '465' }}
+          subject: "[Smart Titles] Daily Report - ${{ steps.summarize.outputs.run_status }}"
+          to: ${{ vars.MAIL_TO || secrets.MAIL_TO || secrets.SMTP_USERNAME }}
+          from: ${{ vars.MAIL_FROM || secrets.SMTP_USERNAME }}
+          html_body: ${{ steps.email_body.outputs.html }}
+          attachments: ${{ steps.summarize.outputs.attachments }}
+
+      - name: 💤 Skip note (no SMTP secrets)
+        if: always() && steps.check_secrets.outputs.ready != 'true'
+        run: echo "SMTP secrets missing. Configure SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD."
+
+      - name: ❗ Fail when collector failed
+        if: steps.run_script.outcome != 'success'
+        run: exit 1
