@@ -457,12 +457,13 @@ def collect_titles(page_limit=None, allow_expand=True, expand_attempts=0):
     else:
         log(f"[DONE] 신규 항목 없음 (dup={dup}). prev={prev}, pool={len(pool)}")
 
-    if allow_expand and added == 0 and not quota_error_detected and not quota_hit_global:
+    if allow_expand and not quota_error_detected and not quota_hit_global:
         if expand_attempts >= PAGE_EXPAND_MAX:
-            log(f"[INFO] 신규 항목 없고 확장 한도({PAGE_EXPAND_MAX}) 도달 → 추가 확장 중단")
+            log(f"[INFO] 확장 한도({PAGE_EXPAND_MAX}) 도달 → 추가 확장 중단")
         else:
             next_limit = page_limit_value + PAGE_EXPAND_STEP
-            log(f"[INFO] 신규 항목 없음 → page_limit {page_limit_value} → {next_limit} 재시도 (attempt {expand_attempts + 1}/{PAGE_EXPAND_MAX})")
+            reason = "신규 없음" if added == 0 else f"신규 {added}건 확보"
+            log(f"[INFO] 추가 탐색({reason}) → page_limit {page_limit_value} → {next_limit} 재시도 (attempt {expand_attempts + 1}/{PAGE_EXPAND_MAX})")
             collect_titles(page_limit=next_limit, allow_expand=True, expand_attempts=expand_attempts + 1)
 
 if __name__ == "__main__":
