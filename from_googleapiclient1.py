@@ -12,7 +12,7 @@ API_KEY = "AIzaSyBYUKxiQxR0zZXJXBiBZTLssmdeR_uYjU8"  # ← 사용자 API 키
 
 # -------- 수집 조건 --------
 MONTHS = 1                     # 최근 n개월
-MIN_VIEWS = 10_000             # 조회수 하한
+MIN_VIEWS = 5_000             # 조회수 하한
 MIN_DURATION = 60 * 60         # 1시간
 MAX_DURATION = 3 * 60 * 60     # 3시간
 MAX_CHANNEL_SUBS = 50_000      # 구독자 수 상한(대형 채널 배제 보조)
