@@ -7,7 +7,9 @@ from googleapiclient.errors import HttpError
 import datetime, re, os, sys, time, traceback, json
 
 # ================== 필수 설정 ==================
-API_KEY = "AIzaSyBYUKxiQxR0zZXJXBiBZTLssmdeR_uYjU8"  # ← 사용자 API 키
+API_KEY = "AIzaSyBZKFGTh4Zhw9MvCDZbDDdjhTGoYlQJq5g"
+# API_KEY = "AIzaSyBYUKxiQxR0zZXJXBiBZTLssmdeR_uYjU8"  # ← 사용자 API 키
+# API_KEY = "AIzaSyBZKFGTh4Zhw9MvCDZbDDdjhTGoYlQJq5g" # ← 사용자 서브API 키
 # ==============================================
 
 # -------- 수집 조건 --------
