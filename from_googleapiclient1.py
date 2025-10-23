@@ -7,8 +7,8 @@ from googleapiclient.errors import HttpError
 import datetime, re, os, sys, time, traceback, json
 
 # ================== 필수 설정 ==================
-API_KEY = "AIzaSyBZKFGTh4Zhw9MvCDZbDDdjhTGoYlQJq5g"
-# API_KEY = "AIzaSyBYUKxiQxR0zZXJXBiBZTLssmdeR_uYjU8"  # ← 사용자 API 키
+# API_KEY = "AIzaSyBZKFGTh4Zhw9MvCDZbDDdjhTGoYlQJq5g"
+API_KEY = "AIzaSyBYUKxiQxR0zZXJXBiBZTLssmdeR_uYjU8"  # ← 사용자 API 키
 # API_KEY = "AIzaSyBZKFGTh4Zhw9MvCDZbDDdjhTGoYlQJq5g" # ← 사용자 서브API 키
 # ==============================================
 
@@ -186,7 +186,7 @@ def append_unique_lines(path, lines, encoding="utf-8"):
             for ln in new_items:
                 f.write(ln + "\n")
         dated_path = build_dated_output_path(path)
-        with open(dated_path, "w", encoding=encoding) as f:
+        with open(dated_path, "a", encoding=encoding) as f:
             for ln in new_items:
                 f.write(ln + "\n")
     return len(new_items), len(candidates) - len(new_items), len(existing), dated_path
